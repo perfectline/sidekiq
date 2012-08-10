@@ -1,0 +1,30 @@
+h1 Failed
+
+- if @failed.size > 0
+  == slim :_paging, :locals => { :url => "#{root_path}failed" }
+
+  form action="#{root_path}failed" method="post"
+    table class="table table-striped table-bordered"
+      tr
+        th
+          input type="checkbox" class="check_all"
+        th Last Retry
+        th Retry Count
+        th Queue
+        th Worker
+        th Args
+      - @failed.each do |(msg, score)|
+        tr
+          td
+            input type='checkbox' name='score[]' value='#{score}'
+          td
+            a href="#{root_path}failed/#{score}"== relative_time(Time.parse(msg['retried_at']))
+          td= msg['retry_count']
+          td
+            a href="#{root_path}queues/#{msg['queue']}" #{msg['queue']}
+          td= msg['class']
+          td= display_args(msg['args'])
+    input.btn.btn-danger type="submit" name="delete" value="Delete"
+- else
+  p No failures found.
+  a href="#{root_path}" Back

@@ -2,6 +2,7 @@
   h1 Sidekiq is #{current_status}
   p Processed: #{processed}
   p Failed: #{failed}
+  p Failures: #{failures}
   p Busy Workers: #{workers.size}
   p Scheduled: #{zcard('schedule')}
   p Retries Pending: #{zcard('retry')}

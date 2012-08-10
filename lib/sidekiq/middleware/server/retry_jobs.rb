@@ -60,17 +60,21 @@ module Sidekiq
             msg['error_backtrace'] = e.backtrace[0..msg['backtrace'].to_i]
           end
 
+          delay = DELAY.call(count)
+          payload = Sidekiq.dump_json(msg)
+
           if count <= MAX_COUNT
-            delay = DELAY.call(count)
-            logger.debug { "Failure! Retry #{count} in #{delay} seconds" }
             retry_at = Time.now.to_f + delay
-            payload = Sidekiq.dump_json(msg)
+            logger.debug { "Failure! Retry #{count} in #{delay} seconds" }
             Sidekiq.redis do |conn|
               conn.zadd('retry', retry_at.to_s, payload)
             end
           else
             # Goodbye dear message, you (re)tried your best I'm sure.
             logger.debug { "Dropping message after hitting the retry maximum: #{msg}" }
+            Sidekiq.redis do |conn|
+              conn.zadd('failed', retry_at.to_s, payload)
+            end
           end
           raise
         end

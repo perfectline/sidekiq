@@ -1,30 +1,30 @@
-require 'sinatra/base'
-require 'slim'
-require 'sprockets'
-require 'sidekiq/paginator'
+require "sinatra/base"
+require "slim"
+require "sprockets"
+require "sidekiq/paginator"
 
 module Sidekiq
   class SprocketsMiddleware
     def initialize(app, options={})
       @app = app
       @root = options[:root]
-      path   =  options[:path] || 'assets'
+      path   =  options[:path] || "assets"
       @matcher = /^\/#{path}\/*/
       @environment = ::Sprockets::Environment.new(@root)
-      @environment.append_path 'assets/javascripts'
-      @environment.append_path 'assets/javascripts/vendor'
-      @environment.append_path 'assets/stylesheets'
-      @environment.append_path 'assets/stylesheets/vendor'
-      @environment.append_path 'assets/images'
+      @environment.append_path "assets/javascripts"
+      @environment.append_path "assets/javascripts/vendor"
+      @environment.append_path "assets/stylesheets"
+      @environment.append_path "assets/stylesheets/vendor"
+      @environment.append_path "assets/images"
     end
 
     def call(env)
       # Solve the problem of people requesting /sidekiq when they need to request /sidekiq/ so
       # that relative links in templates resolve correctly.
-      return [301, { 'Location' => "#{env['SCRIPT_NAME']}/", 'Content-Type' => 'text/html' }, ['redirecting']] if env['SCRIPT_NAME'] == env['REQUEST_PATH']
+      return [301, { "Location" => "#{env["SCRIPT_NAME"]}/", "Content-Type" => "text/html" }, ["redirecting"]] if env["SCRIPT_NAME"] == env["REQUEST_PATH"]
 
       return @app.call(env) unless @matcher =~ env["PATH_INFO"]
-      env['PATH_INFO'].sub!(@matcher,'')
+      env["PATH_INFO"].sub!(@matcher,"")
       @environment.call(env)
     end
   end
@@ -42,9 +42,9 @@ module Sidekiq
 
       def reset_worker_list
         Sidekiq.redis do |conn|
-          workers = conn.smembers('workers')
+          workers = conn.smembers("workers")
           workers.each do |name|
-            conn.srem('workers', name)
+            conn.srem("workers", name)
           end
         end
       end
@@ -52,7 +52,7 @@ module Sidekiq
       def workers
         @workers ||= begin
           Sidekiq.redis do |conn|
-            conn.smembers('workers').map do |w|
+            conn.smembers("workers").map do |w|
               msg = conn.get("worker:#{w}")
               msg ? [w, Sidekiq.load_json(msg)] : nil
             end.compact.sort { |x| x[1] ? -1 : 1 }
@@ -61,11 +61,15 @@ module Sidekiq
       end
 
       def processed
-        Sidekiq.redis { |conn| conn.get('stat:processed') } || 0
+        Sidekiq.redis { |conn| conn.get("stat:processed") } || 0
       end
 
       def failed
-        Sidekiq.redis { |conn| conn.get('stat:failed') } || 0
+        Sidekiq.redis { |conn| conn.get("stat:failed") } || 0
+      end
+
+      def failures
+        Sidekiq.redis { |conn| conn.zcard("failed") } || 0
       end
 
       def zcard(name)
@@ -74,7 +78,7 @@ module Sidekiq
 
       def queues
         @queues ||= Sidekiq.redis do |conn|
-          conn.smembers('queues').map do |q|
+          conn.smembers("queues").map do |q|
             [q, conn.llen("queue:#{q}") || 0]
           end.sort { |x,y| x[1] <=> y[1] }
         end
@@ -84,9 +88,9 @@ module Sidekiq
         queues.map {|name, size| size }.inject(0) {|memo, val| memo + val }
       end
 
-      def retries_with_score(score)
+      def objects_with_score(score, queue)
         Sidekiq.redis do |conn|
-          results = conn.zrangebyscore('retry', score, score)
+          results = conn.zrangebyscore(queue, score, score)
           results.map { |msg| Sidekiq.load_json(msg) }
         end
       end
@@ -96,12 +100,12 @@ module Sidekiq
       end
 
       def root_path
-        "#{env['SCRIPT_NAME']}/"
+        "#{env["SCRIPT_NAME"]}/"
       end
 
       def current_status
-        return 'idle' if workers.size == 0
-        return 'active'
+        return "idle" if workers.size == 0
+        return "active"
       end
 
       def relative_time(time)
@@ -151,57 +155,86 @@ module Sidekiq
     get "/retries/:score" do
       halt 404 unless params[:score]
       @score = params[:score].to_f
-      @retries = retries_with_score(@score)
+      @retries = objects_with_score(@score, "retry")
       redirect "#{root_path}retries" if @retries.empty?
       slim :retry
     end
 
-    get '/retries' do
+    get "/retries" do
       @count = (params[:count] || 25).to_i
       (@current_page, @total_size, @retries) = page("retry", params[:page], @count)
       @retries = @retries.map {|msg, score| [Sidekiq.load_json(msg), score] }
       slim :retries
     end
 
-    get '/scheduled' do
+    get "/failed" do
+      @count = (params[:count] || 25).to_i
+      (@current_page, @total_size, @failed) = page("failed", params[:page], @count)
+      @failed = @failed.map {|msg, score| [Sidekiq.load_json(msg), score] }
+      slim :failed
+    end
+
+    get "/failed/:score" do
+      halt 404 unless params[:score]
+      @score = params[:score].to_f
+      @failed = objects_with_score(@score, "failed")
+      redirect "#{root_path}failed" if @failed.empty?
+      slim :failure
+    end
+
+    get "/scheduled" do
       @count = (params[:count] || 25).to_i
       (@current_page, @total_size, @scheduled) = page("schedule", params[:page], @count)
       @scheduled = @scheduled.map {|msg, score| [Sidekiq.load_json(msg), score] }
       slim :scheduled
     end
 
-    post '/scheduled' do
+    post "/scheduled" do
       halt 404 unless params[:score]
-      halt 404 unless params['delete']
+      halt 404 unless params["delete"]
       params[:score].each do |score|
         s = score.to_f
-        process_score('schedule', s, :delete)
+        process_score("schedule", s, :delete)
       end
       redirect "#{root_path}scheduled"
     end
 
-    post '/retries' do
+    post "/retries" do
       halt 404 unless params[:score]
       params[:score].each do |score|
         s = score.to_f
-        if params['retry']
-          process_score('retry', s, :retry)
-        elsif params['delete']
-          process_score('retry', s, :delete)
+        if params["retry"]
+          process_score("retry", s, :retry)
+        elsif params["delete"]
+          process_score("retry", s, :delete)
         end
       end
       redirect "#{root_path}retries"
     end
 
+    post "/failed" do
+      halt 404 unless params[:score]
+      params[:score].each do |score|
+        process_score("failed", score.to_f, :delete)
+      end
+      redirect "#{root_path}failed"
+    end
+
     post "/retries/:score" do
       halt 404 unless params[:score]
       score = params[:score].to_f
-      if params['retry']
-        process_score('retry', score, :retry)
-      elsif params['delete']
-        process_score('retry', score, :delete)
+      if params["retry"]
+        process_score("retry", score, :retry)
+      elsif params["delete"]
+        process_score("retry", score, :delete)
       end
       redirect "#{root_path}retries"
+    end
+
+    post "/failed/:score" do
+      halt 404 unless params[:score]
+      process_score("retry", params[:score].to_f, :delete)
+      redirect "#{root_path}failed"
     end
 
     def process_score(set, score, operation)
@@ -212,8 +245,8 @@ module Sidekiq
           conn.zremrangebyscore(set, score, score)
           results.map do |message|
             msg = Sidekiq.load_json(message)
-            msg['retry_count'] = msg['retry_count'] - 1
-            conn.rpush("queue:#{msg['queue']}", Sidekiq.dump_json(msg))
+            msg["retry_count"] = msg["retry_count"] - 1
+            conn.rpush("queue:#{msg["queue"]}", Sidekiq.dump_json(msg))
           end
         end
       when :delete
